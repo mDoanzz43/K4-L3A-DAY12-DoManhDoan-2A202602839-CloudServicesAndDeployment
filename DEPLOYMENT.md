@@ -11,17 +11,17 @@
 
 | Mục | Nội dung |
 |-----|----------|
-| Họ và tên | (điền họ tên) |
-| Mã học viên | (điền mã học viên) |
-| Repo | (điền link repo K4-L3A-DAY12-HoVaTen-MSSV-CloudServicesAndDeployment) |
+| Họ và tên | Đỗ Mạnh Đoan
+| Mã học viên | 2A202602839 |
+| Repo | https://github.com/mDoanzz43/K4-L3A-DAY12-DoManhDoan-2A202602839-CloudServicesAndDeployment |
 
 ## Service
 
 | Mục | Nội dung |
 |-----|----------|
-| Public URL | https://TODO-thay-bang-url-that.up.railway.app |
-| Platform | Railway / Render / Cloud Run — (điền platform bạn dùng) |
-| Ngày deploy | (điền ngày) |
+| Public URL | https://agent-production-04f4.up.railway.app |
+| Platform | Railway |
+| Ngày deploy | 2026-09-28 |
 
 ## Biến Môi Trường Đã Set Trên Cloud
 
@@ -31,42 +31,68 @@ Ghi tên biến và **nguồn giá trị**, không ghi giá trị:
 |------|--------|---------|
 | `PORT` | ✅ | platform tự gán |
 | `AGENT_API_KEY` | ✅ | đặt trong dashboard, không nằm trong repo |
-| `REDIS_URL` | ✅ | (điền: Redis add-on của platform / Upstash / ...) |
+| `REDIS_URL` | ✅ | Redis service nội bộ của Railway |
 | `RATE_LIMIT_PER_MINUTE` | ✅ | 10 |
 | `MONTHLY_BUDGET_USD` | ✅ | 10.0 |
 | `LOG_LEVEL` | ✅ | INFO |
 
 ## Lệnh Kiểm Tra
 
-Thay `<URL>` bằng Public URL ở trên:
+Các lệnh dưới đây dành cho Windows PowerShell 5.1. API key được đọc từ `.env`
+cục bộ và không được in ra màn hình.
 
-```bash
-# 1. Liveness — mong đợi 200 {"status":"ok"}
-curl -i <URL>/health
+```powershell
+$URL = "https://agent-production-04f4.up.railway.app"
+$keyLine = Get-Content -LiteralPath ".env" |
+    Where-Object { $_ -match '^\s*AGENT_API_KEY\s*=' } |
+    Select-Object -Last 1
+$env:AGENT_API_KEY = ($keyLine -split "=", 2)[1].Trim()
 
-# 2. Readiness — mong đợi 200 {"status":"ready"} (đã nối được Redis)
-curl -i <URL>/ready
+$json = @{ question = "Deploy là gì?" } | ConvertTo-Json -Compress
+$bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+# 1. Liveness — mong đợi 200
+Invoke-WebRequest -Uri "$URL/health" -UseBasicParsing
+
+# 2. Readiness — mong đợi 200 và redis=true
+Invoke-WebRequest -Uri "$URL/ready" -UseBasicParsing
 
 # 3. Không có API key — mong đợi 401
-curl -i -X POST <URL>/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Hello"}'
+try {
+    Invoke-WebRequest -Method POST -Uri "$URL/ask" `
+        -ContentType "application/json; charset=utf-8" `
+        -Body $bodyBytes -UseBasicParsing
+} catch {
+    [int]$_.Exception.Response.StatusCode
+}
 
 # 4. Có API key — mong đợi 200 kèm câu trả lời
-curl -i -X POST <URL>/ask \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $AGENT_API_KEY" \
-  -H "X-User-Id: sv-test" \
-  -d '{"question":"Deploy là gì?"}'
+$headers = @{
+    "X-API-Key" = $env:AGENT_API_KEY
+    "X-User-Id" = "sv-test"
+}
+$response = Invoke-WebRequest -Method POST -Uri "$URL/ask" `
+    -Headers $headers -ContentType "application/json; charset=utf-8" `
+    -Body $bodyBytes -UseBasicParsing
+$response.StatusCode
+$response.RawContentStream.Position = 0
+[System.Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())
 
-# 5. Rate limit — gọi 15 lần, những lần cuối phải trả 429
-for i in $(seq 1 15); do
-  curl -s -o /dev/null -w "%{http_code} " -X POST <URL>/ask \
-    -H "Content-Type: application/json" \
-    -H "X-API-Key: $AGENT_API_KEY" \
-    -H "X-User-Id: sv-test" \
-    -d '{"question":"test"}'
-done; echo
+# 5. Rate limit — request 1–10 trả 200, request 11–15 trả 429
+$rateHeaders = @{
+    "X-API-Key" = $env:AGENT_API_KEY
+    "X-User-Id" = "sv-rate-" + [guid]::NewGuid().ToString("N")
+}
+1..15 | ForEach-Object {
+    try {
+        $result = Invoke-WebRequest -Method POST -Uri "$URL/ask" `
+            -Headers $rateHeaders -ContentType "application/json; charset=utf-8" `
+            -Body $bodyBytes -UseBasicParsing
+        "Request $_`: $($result.StatusCode)"
+    } catch {
+        "Request $_`: $([int]$_.Exception.Response.StatusCode)"
+    }
+}
 ```
 
 ## Kết Quả Chạy Thật
@@ -74,7 +100,22 @@ done; echo
 Dán output của các lệnh trên vào đây:
 
 ```
-(điền output)
+GET /health
+HTTP 200
+{"status":"ok","service":"day12-agent","version":"1.0.0"}
+
+GET /ready
+HTTP 200
+{"status":"ready","redis":true}
+
+POST /ask không có X-API-Key
+HTTP 401
+
+POST /ask có X-API-Key hợp lệ
+HTTP 200, response có trường answer
+
+Rate-limit test với 15 request cùng X-User-Id
+200 200 200 200 200 200 200 200 200 200 429 429 429 429 429
 ```
 
 ## Ảnh Chụp Màn Hình
@@ -86,17 +127,6 @@ Dán output của các lệnh trên vào đây:
 
 ---
 
-## Nếu Dùng Phương Án Dự Phòng
+## Phương Án Dự Phòng
 
-Không đăng ký được tài khoản cloud? Vẫn nộp được bài, nhưng CP5 tối đa 60% điểm:
-
-1. Đặt `LOCAL_FALLBACK=true` trong `.env`
-2. Chạy `docker compose up -d` rồi kiểm tra `docker compose ps`
-3. Chụp màn hình vào `screenshots/`
-4. Chạy `pytest tests/test_cp5.py -v` — bộ test sẽ tự chuyển sang kiểm tra
-   `http://localhost:8000`
-5. Ghi rõ lý do không deploy được vào phần dưới đây:
-
-```
-(điền lý do nếu dùng phương án dự phòng, ngược lại xóa mục này)
-```
+Không sử dụng phương án local fallback; service đang chạy thật trên Railway.
